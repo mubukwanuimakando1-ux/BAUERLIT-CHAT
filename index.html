@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BAUERLIT CHATAPP – Refactored</title>
+  <!-- Firebase SDKs (Compat for brevity in a single HTML file) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+  <style>
+    :root {
+      --brand:#008069; --bg:#f6f6f6; --panel:#ffffff; --text:#111; --muted:#666; --accent:#dcf8c6;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
+    header { background:var(--brand); color:#fff; padding:10px 14px; display:flex; align-items:center; justify-content:space-between; }
+    header .brand { font-weight:700; letter-spacing:.3px; }
+    header .user { display:flex; align-items:center; gap:10px; }
+    header img { width:32px; height:32px; border-radius:50%; object-fit:cover; }
+
+    /* Layout */
+    #app { display:none; height: calc(100vh - 52px); }
+    .layout { display:grid; grid-template-columns: 320px 1fr; height:100%; }
+    .sidebar { border-right:1px solid #e5e5e5; background:var(--panel); display:flex; flex-direction:column; }
+    .sidebar .section { padding:10px; border-bottom:1px solid #eee; }
+    .sidebar .search { padding:10px; }
+    .sidebar input[type="text"] { width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; }
+    .list { overflow:auto; padding:6px 0; }
+    .row { display:flex; align-items:center; gap:12px; padding:10px 14px; cursor:pointer; }
+    .row:hover { background:#f5f5f5; }
+    .avatar { width:42px; height:42px; border-radius:50%; object-fit:cover; background:#ddd; }
+    .title { font-weight:600; }
+    .sub { font-size:12px; color:var(--muted); }
+
+    /* Chat area */
+    .chat { display:flex; flex-direction:column; height:100%; }
+    .chat-header { background:var(--panel); padding:10px 14px; border-bottom:1px solid #eee; display:flex; align-items:center; gap:12px; }
+    .chat-body { flex:1; overflow:auto; padding:14px; background:#eae6df url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0nNDAnIGhlaWdodD0nNDAnIHhtbG5zPSdodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2Zyc+PHBhdGggZmlsbD0nI2ZmZicgZD0nTTAgMGg0MHY0MEgweiIvPjwvc3ZnPg==') repeat; }
+    .msg { max-width:70%; padding:8px 10px; margin:6px 0; border-radius:10px; box-shadow:0 1px 0 rgba(0,0,0,.04); background:#fff; }
+    .me { margin-left:auto; background:var(--accent); }
+    .msg .meta { display:flex; justify-content:space-between; gap:12px; font-size:11px; color:var(--muted); margin-top:4px; }
+    .composer { background:var(--panel); border-top:1px solid #eee; padding:8px; display:flex; gap:8px; }
+    .composer input[type="text"] { flex:1; padding:10px; border:1px solid #ddd; border-radius:20px; }
+    .composer button { background:var(--brand); color:#fff; border:none; padding:10px 14px; border-radius:20px; cursor:pointer; }
+
+    /* Modals */
+    .modal { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.5); }
+    .card { width:min(420px, 92vw); background:#fff; border-radius:14px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.15); }
+    .card h2 { margin:4px 0 10px; }
+    .card label { display:block; font-size:13px; color:#333; margin:10px 0 6px; }
+    .card input, .card select, .card textarea { width:100%; padding:10px; border:1px solid #ddd; border-radius:10px; }
+    .row-actions { display:flex; gap:8px; margin-top:12px; }
+    .btn { background:var(--brand); color:#fff; border:none; padding:10px 12px; border-radius:10px; cursor:pointer; }
+    .btn.alt { background:#eaeaea; color:#111; }
+
+    .hidden { display:none !important; }
+
+    /* Status viewer */
+    #statusViewer .content { min-height:300px; display:flex; align-items:center; justify-content:center; border:1px dashed #ddd; border-radius:12px; background:#000; color:#fff; overflow:hidden; }
+    #statusViewer .content img, #statusViewer .content video { max-width:100%; max-height:100%; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { height:50%; }
+      .chat { height:50%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">BAUERLIT CHATAPP</div>
+    <div class="user">
+      <img id="meAvatar" src="" alt="me" />
+      <span id="meName">Not signed in</span>
+      <button class="btn alt" id="logoutBtn" onclick="logout()" style="display:none">Logout</button>
+    </div>
+  </header>
+
+  <!-- MAIN APP -->
+  <div id="app">
+    <div class="layout">
+      <!-- Sidebar: search, statuses, contacts -->
+      <aside class="sidebar">
+        <div class="section">
+          <div class="row-actions">
+            <button class="btn" onclick="openStatusComposer()">Post Status</button>
+            <button class="btn alt" onclick="refreshStatuses()">Refresh</button>
+          </div>
+        </div>
+        <div class="section">
+          <strong>Statuses (last 24h)</strong>
+          <div id="statusList" class="list"></div>
+        </div>
+        <div class="search">
+          <input id="contactSearch" type="text" placeholder="Search contacts..." oninput="renderContacts()" />
+        </div>
+        <div class="section"><strong>Contacts</strong></div>
+        <div id="contactList" class="list"></div>
+      </aside>
+
+      <!-- Chat -->
+      <section class="chat">
+        <div class="chat-header">
+          <img id="activeAvatar" class="avatar" src="" alt="avatar" />
+          <div>
+            <div class="title" id="activeName">Select a contact</div>
+            <div class="sub" id="activeSub"></div>
+          </div>
+        </div>
+        <div id="messages" class="chat-body"></div>
+        <div class="composer">
+          <input id="messageInput" type="text" placeholder="Type a message" onkeydown="if(event.key==='Enter') sendMessage()" />
+          <button onclick="sendMessage()">Send</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- AUTH (Step 1) -->
+  <div id="authModal" class="modal">
+    <div class="card">
+      <h2>Sign up / Log in</h2>
+      <p class="sub">Use email & password now. (Phone login can be added after adding reCAPTCHA in Firebase.)</p>
+      <label>Email</label>
+      <input id="email" type="email" placeholder="name@example.com" />
+      <label>Password</label>
+      <input id="password" type="password" placeholder="••••••••" />
+      <div class="row-actions">
+        <button class="btn" onclick="signupEmail()">Sign Up</button>
+        <button class="btn alt" onclick="loginEmail()">Log In</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILE (Step 2) -->
+  <div id="profileModal" class="modal hidden">
+    <div class="card">
+      <h2>Set up your profile</h2>
+      <label>Display name</label>
+      <input id="displayName" type="text" placeholder="Eg. John Banda" />
+      <label>Profile photo</label>
+      <input id="profilePhoto" type="file" accept="image/*" />
+      <div class="row-actions">
+        <button class="btn" onclick="saveProfile()">Save Profile</button>
+        <button class="btn alt" onclick="skipProfile()">Skip</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATUS COMPOSER -->
+  <div id="statusComposer" class="modal hidden">
+    <div class="card">
+      <h2>Create Status</h2>
+      <label>Type</label>
+      <select id="statusType" onchange="onStatusTypeChange()">
+        <option value="text">Text</option>
+        <option value="image">Photo</option>
+        <option value="video">Video</option>
+      </select>
+
+      <div id="statusTextPanel">
+        <label>Text</label>
+        <textarea id="statusText" rows="4" placeholder="What's on your mind?"></textarea>
+        <div class="row-actions">
+          <button class="btn alt" onclick="toggleBold()"><b>B</b></button>
+          <button class="btn alt" onclick="toggleItalic()"><i>I</i></button>
+          <label style="display:flex; align-items:center; gap:6px;">Text
+            <input id="textColor" type="color" value="#ffffff" />
+          </label>
+          <label style="display:flex; align-items:center; gap:6px;">Background
+            <input id="bgColor" type="color" value="#000000" />
+          </label>
+        </div>
+      </div>
+
+      <div id="statusMediaPanel" class="hidden">
+        <label id="mediaLabel">Upload photo</label>
+        <input id="statusMedia" type="file" accept="image/*" />
+      </div>
+
+      <label>Visibility</label>
+      <select id="statusVisibility">
+        <option value="public">Public</option>
+        <option value="contacts">Contacts</option>
+        <option value="private">Only me</option>
+      </select>
+      <div class="row-actions">
+        <button class="btn" onclick="postStatus()">Post</button>
+        <button class="btn alt" onclick="closeStatusComposer()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATUS VIEWER -->
+  <div id="statusViewer" class="modal hidden">
+    <div class="card" style="width:min(560px,95vw)">
+      <div class="row" style="padding:0 0 8px 0;">
+        <img id="viewerAvatar" class="avatar" src="" alt="" />
+        <div>
+          <div class="title" id="viewerName"></div>
+          <div class="sub" id="viewerMeta"></div>
+        </div>
+        <div style="margin-left:auto" class="row-actions">
+          <button class="btn alt" onclick="closeStatusViewer()">Close</button>
+        </div>
+      </div>
+      <div class="content" id="viewerContent"></div>
+      <div class="row-actions" style="justify-content:space-between;">
+        <button class="btn alt" onclick="prevStatus()">Prev</button>
+        <button class="btn" onclick="nextStatus()">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /***** 1) FIREBASE INIT *****/
+const firebaseConfig = {
+  apiKey: "AIzaSyC4QQyrVHH6ZkjjprLpnSZ4sj-fxxZcfLk",
+  authDomain: "bauerlit-chatapp.firebaseapp.com",
+  projectId: "bauerlit-chatapp",
+  storageBucket: "bauerlit-chatapp.firebasestorage.app",
+  messagingSenderId: "978483049676",
+  appId: "1:978483049676:web:1a532b2f23f9050fc6be69",
+  measurementId: "G-9DM0XK272Y"
+};
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const storage = firebase.storage();
+
+    /***** 2) GLOBAL STATE *****/
+    let me = null;                 // auth user
+    let meProfile = null;          // Firestore user profile
+    let contacts = [];             // array of user profiles
+    let activeChatId = null;       // current chat id
+    let activePeer = null;         // current chat peer profile
+    let messagesUnsub = null;      // listener cleanup
+
+    // Status viewer state
+    let viewerPosts = []; let viewerIndex = 0; let viewerUser = null;
+
+    const DEFAULT_AVATAR = 'https://via.placeholder.com/80?text=%F0%9F%91%A5';
+
+    /***** 3) AUTH STATE LISTENER (prevents null uid errors) *****/
+    auth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        me = null; meProfile = null;
+        document.getElementById('authModal').classList.remove('hidden');
+        document.getElementById('profileModal').classList.add('hidden');
+        document.getElementById('app').style.display = 'none';
+        document.getElementById('logoutBtn').style.display = 'none';
+        document.getElementById('meName').textContent = 'Not signed in';
+        document.getElementById('meAvatar').src = DEFAULT_AVATAR;
+        return;
+      }
+      me = user;
+      document.getElementById('logoutBtn').style.display = 'inline-block';
+      // load or create profile prompt
+      const snap = await db.collection('users').doc(me.uid).get();
+      if (!snap.exists) {
+        // ask for profile
+        document.getElementById('authModal').classList.add('hidden');
+        document.getElementById('profileModal').classList.remove('hidden');
+        return;
+      }
+      meProfile = snap.data();
+      hydrateMeHeader();
+      enterApp();
+    });
+
+    function hydrateMeHeader(){
+      document.getElementById('meName').textContent = meProfile?.name || (me?.email ?? 'User');
+      document.getElementById('meAvatar').src = meProfile?.photoURL || DEFAULT_AVATAR;
+    }
+
+    /***** 4) AUTH ACTIONS *****/
+    async function signupEmail(){
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if(!email || !password){ return alert('Enter email & password'); }
+      try { await auth.createUserWithEmailAndPassword(email, password); }
+      catch(e){ alert(e.message); }
+    }
+    async function loginEmail(){
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if(!email || !password){ return alert('Enter email & password'); }
+      try { await auth.signInWithEmailAndPassword(email, password); }
+      catch(e){ alert(e.message); }
+    }
+    async function logout(){ try { await auth.signOut(); } catch(e){ alert(e.message); } }
+
+    /***** 5) PROFILE CREATION *****/
+    async function saveProfile(){
+      if(!auth.currentUser){ return alert('Not signed in yet'); }
+      const name = document.getElementById('displayName').value.trim();
+      const file = document.getElementById('profilePhoto').files[0];
+      if(!name){ return alert('Please enter a display name'); }
+      let photoURL = '';
+      try {
+        if(file){
+          const ref = storage.ref(`profilePhotos/${auth.currentUser.uid}.jpg`);
+          await ref.put(file);
+          photoURL = await ref.getDownloadURL();
+        }
+        const profile = {
+          uid: auth.currentUser.uid,
+          name,
+          email: auth.currentUser.email || '',
+          phone: auth.currentUser.phoneNumber || '',
+          photoURL: photoURL || '',
+          status: "Hey there! I’m using BAUERLIT CHATAPP",
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('users').doc(auth.currentUser.uid).set(profile);
+        meProfile = profile; hydrateMeHeader();
+        document.getElementById('profileModal').classList.add('hidden');
+        enterApp();
+      } catch(e){ alert(e.message); }
+    }
+    function skipProfile(){
+      if(!auth.currentUser) return;
+      document.getElementById('profileModal').classList.add('hidden');
+      enterApp();
+    }
+
+    /***** 6) ENTER APP: load contacts, statuses, etc. *****/
+    function enterApp(){
+      if(!auth.currentUser) return;
+      document.getElementById('authModal').classList.add('hidden');
+      document.getElementById('app').style.display = 'block';
+      // presence update
+      db.collection('users').doc(auth.currentUser.uid).update({ lastSeen: firebase.firestore.FieldValue.serverTimestamp() }).catch(()=>{});
+      loadContacts();
+      refreshStatuses();
+    }
+
+    /***** 7) CONTACTS *****/
+    async function loadContacts(){
+      if(!auth.currentUser) return;
+      const qs = await db.collection('users').orderBy('name').get();
+      contacts = [];
+      qs.forEach(d => { const u = d.data(); if(u.uid !== auth.currentUser.uid) contacts.push(u); });
+      renderContacts();
+    }
+    function renderContacts(){
+      const list = document.getElementById('contactList');
+      const q = document.getElementById('contactSearch').value?.toLowerCase() || '';
+      list.innerHTML = '';
+      contacts.filter(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q))
+        .forEach(c => {
+          const row = document.createElement('div'); row.className='row';
+          row.innerHTML = `<img class="avatar" src="${c.photoURL||DEFAULT_AVATAR}" alt=""/>`+
+                          `<div><div class="title">${c.name||'Unknown'}</div>`+
+                          `<div class="sub">${c.email||c.phone||''}</div></div>`;
+          row.onclick = ()=> openChat(c);
+          list.appendChild(row);
+        });
+    }
+
+    /***** 8) CHAT *****/
+    function chatIdFor(a,b){ return [a,b].sort().join('_'); }
+    function openChat(peer){
+      if(!auth.currentUser) return;
+      activePeer = peer;
+      activeChatId = chatIdFor(auth.currentUser.uid, peer.uid);
+      document.getElementById('activeName').textContent = peer.name||'Chat';
+      document.getElementById('activeSub').textContent = peer.email||peer.phone||'';
+      document.getElementById('activeAvatar').src = peer.photoURL||DEFAULT_AVATAR;
+      if(messagesUnsub) { messagesUnsub(); messagesUnsub=null; }
+      messagesUnsub = db.collection('chats').doc(activeChatId).collection('messages').orderBy('createdAt')
+        .onSnapshot(snap => {
+          const box = document.getElementById('messages');
+          box.innerHTML = '';
+          snap.forEach(d => {
+            const m = d.data();
+            const div = document.createElement('div');
+            div.className = 'msg'+(m.sender===auth.currentUser.uid?' me':'');
+            div.innerHTML = `<div>${escapeHtml(m.text||'')}</div>`+
+                            `<div class="meta"><span>${m.senderName||'User'}</span><span>${m.createdAt?m.createdAt.toDate().toLocaleString():''}</span></div>`;
+            box.appendChild(div);
+          });
+          box.scrollTop = box.scrollHeight;
+        });
+    }
+    async function sendMessage(){
+      if(!auth.currentUser || !activeChatId) return;
+      const input = document.getElementById('messageInput');
+      const text = input.value.trim(); if(!text) return;
+      input.value='';
+      await db.collection('chats').doc(activeChatId).collection('messages').add({
+        sender: auth.currentUser.uid,
+        senderName: meProfile?.name || auth.currentUser.email || 'Me',
+        text,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    /***** 9) STATUSES *****/
+    function openStatusComposer(){
+      if(!auth.currentUser) return alert('Please sign in first');
+      document.getElementById('statusComposer').classList.remove('hidden');
+      onStatusTypeChange();
+    }
+    function closeStatusComposer(){ document.getElementById('statusComposer').classList.add('hidden'); }
+
+    function onStatusTypeChange(){
+      const type = document.getElementById('statusType').value;
+      const mediaPanel = document.getElementById('statusMediaPanel');
+      const textPanel = document.getElementById('statusTextPanel');
+      const media = document.getElementById('statusMedia');
+      const label = document.getElementById('mediaLabel');
+      if(type==='text'){
+        textPanel.classList.remove('hidden');
+        mediaPanel.classList.add('hidden');
+      } else {
+        textPanel.classList.add('hidden');
+        mediaPanel.classList.remove('hidden');
+        if(type==='image'){ media.accept='image/*'; label.textContent='Upload photo'; }
+        if(type==='video'){ media.accept='video/*'; label.textContent='Upload video'; }
+      }
+    }
+
+    let styleState = { bold:false, italic:false };
+    function toggleBold(){ styleState.bold=!styleState.bold; }
+    function toggleItalic(){ styleState.italic=!styleState.italic; }
+
+    async function postStatus(){
+      if(!auth.currentUser) return alert('Please sign in first');
+      const type = document.getElementById('statusType').value;
+      const visibility = document.getElementById('statusVisibility').value;
+      const base = { uid: auth.currentUser.uid, name: meProfile?.name||'User', photoURL: meProfile?.photoURL||'', visibility, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
+      try{
+        if(type==='text'){
+          const text = document.getElementById('statusText').value.trim();
+          const style = { color: document.getElementById('textColor').value, background: document.getElementById('bgColor').value, bold: styleState.bold, italic: styleState.italic };
+          if(!text) return alert('Write something');
+          await db.collection('status').doc(auth.currentUser.uid).collection('posts').add({ ...base, type:'text', content:text, style });
+        } else {
+          const file = document.getElementById('statusMedia').files[0];
+          if(!file) return alert('Choose a file');
+          const ext = type==='image'?'jpg':'mp4';
+          const ref = storage.ref(`statusMedia/${auth.currentUser.uid}/${Date.now()}.${ext}`);
+          await ref.put(file);
+          const url = await ref.getDownloadURL();
+          await db.collection('status').doc(auth.currentUser.uid).collection('posts').add({ ...base, type, content:url });
+        }
+        closeStatusComposer();
+        refreshStatuses();
+      }catch(e){ alert(e.message); }
+    }
+
+    async function refreshStatuses(){
+      if(!auth.currentUser) return;
+      const since = new Date(Date.now() - 24*60*60*1000);
+      const list = document.getElementById('statusList'); list.innerHTML='';
+      // Fetch all users, then for each, check if they have posts in last 24h
+      const users = await db.collection('users').get();
+      for(const doc of users.docs){
+        const u = doc.data();
+        const postsSnap = await db.collection('status').doc(u.uid).collection('posts').where('createdAt','>', firebase.firestore.Timestamp.fromDate(since)).orderBy('createdAt','desc').get();
+        if(!postsSnap.empty){
+          const row = document.createElement('div'); row.className='row';
+          row.innerHTML = `<img class="avatar" src="${u.photoURL||DEFAULT_AVATAR}"/>`+
+                          `<div><div class="title">${u.name||'User'}</div>`+
+                          `<div class="sub">${postsSnap.size} post(s) today</div></div>`;
+          row.onclick = ()=> openStatusViewer(u, postsSnap.docs.map(d=>({ id:d.id, ...d.data() }))); 
+          list.appendChild(row);
+        }
+      }
+    }
+
+    function openStatusViewer(user, posts){
+      viewerUser = user; viewerPosts = posts.sort((a,b)=>a.createdAt?.toMillis()-b.createdAt?.toMillis()); viewerIndex = 0;
+      document.getElementById('statusViewer').classList.remove('hidden');
+      renderViewer();
+    }
+    function closeStatusViewer(){ document.getElementById('statusViewer').classList.add('hidden'); }
+    function nextStatus(){ if(viewerIndex < viewerPosts.length-1){ viewerIndex++; renderViewer(); } }
+    function prevStatus(){ if(viewerIndex > 0){ viewerIndex--; renderViewer(); } }
+
+    function renderViewer(){
+      const p = viewerPosts[viewerIndex]; if(!p) return;
+      document.getElementById('viewerAvatar').src = viewerUser.photoURL||DEFAULT_AVATAR;
+      document.getElementById('viewerName').textContent = viewerUser.name||'User';
+      document.getElementById('viewerMeta').textContent = new Date(p.createdAt?.toMillis?.()||Date.now()).toLocaleString();
+      const box = document.getElementById('viewerContent'); box.innerHTML='';
+      if(p.type==='text'){
+        const div = document.createElement('div');
+        div.style.width='100%'; div.style.height='320px'; div.style.display='flex'; div.style.alignItems='center'; div.style.justifyContent='center';
+        div.style.color = p.style?.color || '#fff'; div.style.background = p.style?.background || '#000';
+        div.style.fontWeight = p.style?.bold ? '700':'400'; div.style.fontStyle = p.style?.italic ? 'italic':'normal';
+        div.textContent = p.content; box.appendChild(div);
+      } else if(p.type==='image'){
+        const img = document.createElement('img'); img.src = p.content; img.alt='status image'; box.appendChild(img);
+      } else if(p.type==='video'){
+        const vid = document.createElement('video'); vid.src=p.content; vid.controls=true; vid.autoplay=true; box.appendChild(vid);
+      }
+    }
+
+    /***** 10) UTIL *****/
+    function escapeHtml(str){ return String(str).replace(/[&<>"']/g, s=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[s])); }
+
+    /***** 11) "TEST CASES" (dev console checks) *****/
+    // These simple runtime checks prevent common crashes and verify util functions.
+    console.assert(typeof chatIdFor('b','a')==='string' && chatIdFor('b','a')===chatIdFor('a','b'), 'chatIdFor must be order-independent');
+    console.assert(escapeHtml('<tag>')==='&lt;tag&gt;', 'escapeHtml should escape angle brackets');
+  </script>
+
+  <!--
+  ===================== SECURITY RULES (copy to Firestore Rules) =====================
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+      match /users/{userId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+      match /chats/{chatId} {
+        allow read, write: if request.auth != null;
+      }
+      match /status/{userId}/{document=**} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+  }
+  ==================================================================================
+  -->
+</body>
+</html>
